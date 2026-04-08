@@ -1,0 +1,35 @@
+{
+  "name": "Il mio Ricettario",
+  "short_name": "Ricettario",
+  "description": "Salva le ricette dai reel social con estrazione AI di ingredienti e procedura",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAF7F2",
+  "theme_color": "#FAF7F2",
+  "orientation": "portrait-primary",
+  "lang": "it",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["food", "utilities", "lifestyle"],
+  "share_target": {
+    "action": "/share",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
+}
