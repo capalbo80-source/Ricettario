@@ -445,13 +445,19 @@ async function extractRecipe() {
     : `Sei un assistente culinario. Estrai e struttura questa ricetta da un reel social. Descrizione: "${desc}". Rispondi SOLO con JSON valido: {"name":"nome","ingredients":["ing1","ing2"],"procedure":"1. passo\\n2. passo","notes":"nota opzionale","platform":"${selectedPlatform}"}`;
 
   try {
-    const res = await fetch('/api/claude', {
+    const GEMINI_KEY = 'AIzaSyAMx7vLCBR8VBkn9nBr14VOMfWM2UT14gk';
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
+    const res = await fetch(geminiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt })
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
+      })
     });
     const data = await res.json();
-    const clean = (data.text || '').replace(/```json|```/g, '').trim();
+    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const clean = raw.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(clean);
     editingId = null;
     document.getElementById('editName').value = parsed.name || '';
@@ -619,3 +625,4 @@ function showToast(msg) {
 </script>
 </body>
 </html>
+
