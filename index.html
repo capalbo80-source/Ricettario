@@ -448,15 +448,10 @@ async function extractRecipe() {
     const res = await fetch('/api/claude', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }]
-      })
+      body: JSON.stringify({ prompt })
     });
     const data = await res.json();
-    const raw = data.content.map(c => c.text || '').join('');
-    const clean = raw.replace(/```json|```/g, '').trim();
+    const clean = (data.text || '').replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(clean);
     editingId = null;
     document.getElementById('editName').value = parsed.name || '';
