@@ -446,7 +446,7 @@ async function extractRecipe() {
 
   try {
     const GEMINI_KEY = 'AIzaSyAMx7vLCBR8VBkn9nBr14VOMfWM2UT14gk';
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
     const res = await fetch(geminiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -626,4 +626,3 @@ function showToast(msg) {
 </script>
 </body>
 </html>
-
