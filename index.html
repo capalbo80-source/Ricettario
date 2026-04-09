@@ -467,7 +467,8 @@ async function extractRecipe() {
     document.getElementById('editPanel').style.display = 'block';
     document.getElementById('editPanel').scrollIntoView({ behavior: 'smooth' });
   } catch(e) {
-    showToast('Errore — riprova o inserisci manualmente');
+    showToast('Errore: ' + e.message);
+    console.error('Extract error:', e);
   }
 
   btn.disabled = false;
