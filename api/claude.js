@@ -1,4 +1,4 @@
-xport default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -8,7 +8,7 @@ xport default async function handler(req, res) {
 
   try {
     const { prompt } = req.body;
-    const apiKey = "AIzaSyAMx7vLCBR8VBkn9nBr14VOMfWM2UT14gk";
+    const apiKey = 'AIzaSyAMx7vLCBR8VBkn9nBr14VOMfWM2UT14gk';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
     const response = await fetch(url, {
@@ -26,4 +26,4 @@ xport default async function handler(req, res) {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-}
+};
