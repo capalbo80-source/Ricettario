@@ -120,11 +120,16 @@
     </div>
     <div class="divider">oppure</div>
     <div class="field-group">
-      <label class="field-label">Descrivi la ricetta</label>
-      <textarea id="descInput" placeholder="Es: Ho visto un reel di pasta al limone con panna, aglio e scorza di limone..."></textarea>
+      <label class="field-label">Caption / descrizione del post</label>
+      <textarea id="captionInput" style="min-height:110px" placeholder="Incolla qui la descrizione del reel — di solito contiene già ingredienti e procedura. Su Instagram: tocca i tre puntini ··· → Copia didascalia"></textarea>
+    </div>
+    <div class="divider">oppure</div>
+    <div class="field-group">
+      <label class="field-label">Descrivi tu la ricetta</label>
+      <textarea id="descInput" placeholder="Es: pasta al limone con panna, aglio e scorza di limone..."></textarea>
     </div>
     <button class="btn-primary" id="extractBtn" onclick="extractRecipe()">Estrai ricetta con AI</button>
-    <p class="note">L'AI estrae ingredienti e procedura. Per video privati, usa la descrizione manuale.</p>
+    <p class="note">💡 Il modo più preciso: copia la didascalia del reel e incollala nel campo "Caption"</p>
     <div id="loadingBox" style="display:none" class="loading-msg">
       <div class="spinner"></div>
       <p>Estrazione in corso...</p>
@@ -198,17 +203,24 @@ function switchTab(name) {
 
 async function extractRecipe() {
   const url = document.getElementById('urlInput').value.trim();
+  const caption = document.getElementById('captionInput').value.trim();
   const desc = document.getElementById('descInput').value.trim();
-  if (!url && !desc) { showToast('Inserisci un link o una descrizione'); return; }
+  const input = caption || desc;
+  if (!url && !input) { showToast('Incolla la caption o descrivi la ricetta'); return; }
 
   const btn = document.getElementById('extractBtn');
   btn.disabled = true;
   document.getElementById('loadingBox').style.display = 'block';
   document.getElementById('editPanel').style.display = 'none';
 
-  const prompt = url
-    ? `Sei un assistente culinario. L'utente ha trovato una ricetta su ${selectedPlatform}: ${url}. Genera una ricetta plausibile e deliziosa basata sul contesto del link. Rispondi SOLO con JSON valido, niente testo prima o dopo: {"name":"nome ricetta","ingredients":["ingrediente 1","ingrediente 2"],"procedure":"1. passo\\n2. passo","notes":"suggerimento opzionale","platform":"${selectedPlatform}"}`
-    : `Sei un assistente culinario. Estrai e struttura questa ricetta vista in un reel social. Descrizione: "${desc}". Rispondi SOLO con JSON valido: {"name":"nome ricetta","ingredients":["ingrediente 1","ingrediente 2"],"procedure":"1. passo\\n2. passo","notes":"suggerimento opzionale","platform":"${selectedPlatform}"}`;
+  let prompt;
+  if (caption) {
+    prompt = `Sei un assistente culinario. Estrai la ricetta da questa caption di un reel ${selectedPlatform}. Caption: "${caption}". Rispondi SOLO con JSON valido, niente testo prima o dopo: {"name":"nome ricetta","ingredients":["ingrediente 1","ingrediente 2"],"procedure":"1. passo\\n2. passo","notes":"suggerimento opzionale","platform":"${selectedPlatform}"}`;
+  } else if (desc) {
+    prompt = `Sei un assistente culinario. Estrai e struttura questa ricetta vista in un reel social. Descrizione: "${desc}". Rispondi SOLO con JSON valido: {"name":"nome ricetta","ingredients":["ingrediente 1","ingrediente 2"],"procedure":"1. passo\\n2. passo","notes":"suggerimento opzionale","platform":"${selectedPlatform}"}`;
+  } else {
+    prompt = `Sei un assistente culinario. L'utente ha condiviso questo link ${selectedPlatform}: ${url}. Genera una ricetta italiana deliziosa. Rispondi SOLO con JSON valido: {"name":"nome ricetta","ingredients":["ingrediente 1","ingrediente 2"],"procedure":"1. passo\\n2. passo","notes":"suggerimento opzionale","platform":"${selectedPlatform}"}`;
+  }
 
   try {
     const res = await fetch('/api/groq', {
@@ -225,6 +237,7 @@ async function extractRecipe() {
     });
     const data = await res.json();
     const raw = data?.choices?.[0]?.message?.content || '';
+    // Extract JSON robustly — find first { ... } block
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('Nessun JSON trovato nella risposta');
     const parsed = JSON.parse(jsonMatch[0]);
@@ -272,6 +285,7 @@ function discardEdit() {
   document.getElementById('editProcedure').value = '';
   document.getElementById('editNotes').value = '';
   document.getElementById('urlInput').value = '';
+  document.getElementById('captionInput').value = '';
   document.getElementById('descInput').value = '';
 }
 
