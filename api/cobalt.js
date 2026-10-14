@@ -1,10 +1,6 @@
-// Proxy per cobalt API - scarica video da link social
-// Usa istanze pubbliche cobalt che non richiedono auth
-const COBALT_INSTANCES = [
-  'https://cobalt.api.buldakov.ru',
-  'https://co.wuk.sh',
-  'https://cobalt.downloadthis.online',
-];
+// Proxy per fastsaver.io API - scarica video da link social
+// Documentazione: https://fastsaverapi.com/docs
+// Chiave API da impostare in Vercel come FASTSAVER_API_KEY
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -13,55 +9,43 @@ module.exports = async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).end();
 
+  const apiKey = process.env.FASTSAVER_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'FASTSAVER_API_KEY non configurata' });
+
   let body = req.body;
   if (typeof body === 'string') body = JSON.parse(body);
   const { url } = body;
   if (!url) return res.status(400).json({ error: 'url mancante' });
 
-  // Prova ogni istanza finché una funziona
-  let lastError = null;
-  for (const instance of COBALT_INSTANCES) {
-    try {
-      const response = await fetch(`${instance}/`, {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          url,
-          downloadMode: 'auto',
-          videoQuality: '720',
-          filenameStyle: 'basic'
-        }),
-        signal: AbortSignal.timeout(15000)
-      });
-
-      if (!response.ok) {
-        lastError = `${instance}: HTTP ${response.status}`;
-        continue;
+  try {
+    const response = await fetch(
+      `https://api.fastsaver.io/v1/fetch?url=${encodeURIComponent(url)}`,
+      {
+        method: 'GET',
+        headers: { 'X-Api-Key': apiKey },
+        signal: AbortSignal.timeout(20000)
       }
+    );
 
-      const data = await response.json();
+    const data = await response.json();
 
-      if (data.status === 'error') {
-        lastError = data.error?.code || 'errore cobalt';
-        continue;
-      }
-
-      if (data.status === 'tunnel' || data.status === 'redirect') {
-        return res.status(200).json({ videoUrl: data.url, filename: data.filename });
-      }
-
-      if (data.status === 'picker' && data.picker?.length > 0) {
-        return res.status(200).json({ videoUrl: data.picker[0].url, filename: data.filename });
-      }
-
-      lastError = `Risposta inattesa: ${data.status}`;
-    } catch (err) {
-      lastError = `${instance}: ${err.message}`;
+    if (!data.ok) {
+      return res.status(502).json({ error: data.message || 'Errore API fastsaver' });
     }
-  }
 
-  res.status(502).json({ error: lastError || 'Nessuna istanza disponibile' });
+    // Risposta singola (video/reel)
+    if (data.download_url) {
+      return res.status(200).json({ videoUrl: data.download_url, filename: data.filename || 'video.mp4' });
+    }
+
+    // Album/carosello — prendi il primo video
+    if (data.items && data.items.length > 0) {
+      const videoItem = data.items.find(i => i.type === 'video') || data.items[0];
+      return res.status(200).json({ videoUrl: videoItem.download_url, filename: videoItem.filename || 'video.mp4' });
+    }
+
+    return res.status(502).json({ error: 'Nessun video trovato nella risposta' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 };

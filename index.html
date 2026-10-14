@@ -432,7 +432,9 @@ async function extractFromLink() {
       body: JSON.stringify({ url })
     });
     const cobaltData = await cobaltRes.json();
-    if (!cobaltRes.ok || !cobaltData.videoUrl) throw new Error(cobaltData.error || 'Download fallito');
+    if (!cobaltRes.ok || !cobaltData.videoUrl) {
+      throw new Error((cobaltData.error || 'Download fallito') + ' — Scarica il video dal social e usa il tab 🎬');
+    }
 
     setProgress(25);
     showStatus('📥 Video scaricato, scaricamento file...', 'info');
@@ -557,41 +559,58 @@ async function extractFromCaption() {
 
 // ── Groq LLM call ─────────────────────────────────────────────────────────────
 async function callGroqExtract(inputText, nameHint) {
-  const nameContext = nameHint ? `Il nome della ricetta è probabilmente: "${nameHint}".` : '';
-  const prompt = `Sei un assistente culinario. Analizza il testo seguente e estrai la ricetta. ${nameContext}
+  const nameContext = nameHint ? `Nome ricetta: "${nameHint}".` : '';
+  const prompt = `Sei un assistente culinario italiano. ${nameContext}
 
-Testo:
+Il tuo unico compito è rispondere con un oggetto JSON valido che rappresenta una ricetta estratta dal testo.
+NON scrivere nulla prima o dopo il JSON. NON usare markdown. NON spiegare nulla.
+Inizia SEMPRE con { e finisci con }
+
+Testo da analizzare:
 """
 ${inputText.slice(0, 3000)}
 """
 
-Rispondi SOLO con un JSON valido, nessun testo fuori dal JSON:
-{
-  "nome": "nome della ricetta",
-  "ingredienti": ["ingrediente 1 con quantità", "ingrediente 2 con quantità"],
-  "procedimento": "procedimento completo passo per passo"
-}
+Formato richiesto (SOLO questo, nient'altro):
+{"nome":"nome della ricetta","ingredienti":["ingrediente 1 con quantità","ingrediente 2 con quantità"],"procedimento":"passo 1. Descrizione. Passo 2. Descrizione."}
 
-Se il testo non contiene una ricetta, inventa una ricetta plausibile basata su qualsiasi cibo menzionato. Non aggiungere spiegazioni, solo il JSON.`;
+Se il testo non contiene una ricetta chiara, crea una ricetta plausibile basandoti su qualsiasi alimento o piatto menzionato.`;
 
   const res = await fetch('/api/groq', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.4,
-      max_tokens: 1200
+      messages: [
+        { role: 'system', content: 'Sei un assistente culinario. Rispondi SEMPRE e SOLO con JSON valido, senza testo aggiuntivo, senza markdown, senza spiegazioni.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.2,
+      max_tokens: 1500,
+      response_format: { type: 'json_object' }
     })
   });
   if (!res.ok) throw new Error('Groq API: ' + res.status);
   const data = await res.json();
   if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
   const raw = data?.choices?.[0]?.message?.content || '';
-  const match = raw.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error('Risposta AI non valida');
-  const parsed = JSON.parse(match[0]);
-  if (!parsed.nome || !parsed.ingredienti || !parsed.procedimento) throw new Error('Ricetta incompleta nella risposta');
+
+  // Prova prima il parsing diretto, poi cerca con regex
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('Nessun JSON trovato nella risposta. Testo trascritto: "' + inputText.slice(0, 100) + '..."');
+    parsed = JSON.parse(match[0]);
+  }
+
+  // Normalizza la struttura in caso di variazioni
+  if (!parsed.nome) parsed.nome = nameHint || 'Ricetta senza nome';
+  if (!parsed.ingredienti) parsed.ingredienti = parsed.ingredients || parsed.Ingredienti || [];
+  if (!Array.isArray(parsed.ingredienti)) parsed.ingredienti = [String(parsed.ingredienti)];
+  if (!parsed.procedimento) parsed.procedimento = parsed.procedure || parsed.Procedimento || parsed.instructions || 'Procedimento non disponibile';
+
   return parsed;
 }
 
