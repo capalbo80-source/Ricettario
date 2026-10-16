@@ -1,82 +1,83 @@
-const { execSync } = require('child_process');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+// Trascrizione audio/video con Groq Whisper
+// Groq Whisper accetta: mp4, mp3, wav, webm, m4a, ogg, flac (max 25MB)
+
+const Busboy = require('busboy');
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).end();
 
-  const tmpDir = os.tmpdir();
-  const inputPath = path.join(tmpDir, `input_${Date.now()}.mp4`);
-  const audioPath = path.join(tmpDir, `audio_${Date.now()}.mp3`);
-
   try {
-    // Raccoglie il body (multipart con il video)
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = Buffer.concat(chunks);
+    // Leggi il file dal multipart con busboy
+    const fileBuffer = await new Promise((resolve, reject) => {
+      const bb = Busboy({ headers: req.headers });
+      let chunks = [];
+      let found = false;
 
-    // Estrae il file video dal multipart
-    const contentType = req.headers['content-type'] || '';
-    const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
-
-    let videoBuffer;
-    if (boundaryMatch) {
-      // Parsing manuale del multipart per estrarre il file
-      const boundary = '--' + boundaryMatch[1];
-      const bodyStr = body.toString('binary');
-      const parts = bodyStr.split(boundary);
-      for (const part of parts) {
-        if (part.includes('Content-Disposition') && part.includes('filename')) {
-          const headerEnd = part.indexOf('\r\n\r\n');
-          if (headerEnd !== -1) {
-            const fileData = part.slice(headerEnd + 4, part.lastIndexOf('\r\n'));
-            videoBuffer = Buffer.from(fileData, 'binary');
-            break;
-          }
-        }
-      }
-    }
-
-    if (!videoBuffer || videoBuffer.length < 1000) {
-      // Fallback: usa il body direttamente come video
-      videoBuffer = body;
-    }
-
-    // Salva il video su disco
-    fs.writeFileSync(inputPath, videoBuffer);
-
-    // Controlla se ffmpeg è disponibile e estrai audio
-    let audioBuffer;
-    try {
-      execSync(`ffmpeg -i "${inputPath}" -vn -ar 16000 -ac 1 -b:a 64k "${audioPath}" -y 2>/dev/null`, {
-        timeout: 60000
+      bb.on('file', (name, stream) => {
+        found = true;
+        stream.on('data', d => chunks.push(d));
+        stream.on('end', () => resolve(Buffer.concat(chunks)));
+        stream.on('error', reject);
       });
-      audioBuffer = fs.readFileSync(audioPath);
-    } catch (ffmpegErr) {
-      // ffmpeg non disponibile: manda il video direttamente a Whisper
-      audioBuffer = videoBuffer;
+
+      bb.on('finish', () => {
+        if (!found) reject(new Error('Nessun file nel form'));
+      });
+      bb.on('error', reject);
+      req.pipe(bb);
+    });
+
+    if (!fileBuffer || fileBuffer.length < 100) {
+      return res.status(400).json({ error: 'File vuoto o troppo piccolo' });
     }
 
-    // Crea il FormData per Whisper
-    const FormData = require('form-data');
-    const form = new FormData();
-    form.append('file', audioBuffer, { filename: 'audio.mp3', contentType: 'audio/mpeg' });
-    form.append('model', 'whisper-large-v3');
-    form.append('language', 'it');
-    form.append('response_format', 'json');
+    if (fileBuffer.length > 25 * 1024 * 1024) {
+      return res.status(400).json({ error: 'File troppo grande (max 25 MB)' });
+    }
+
+    // Costruisci il multipart manualmente per Groq
+    const boundary = '----FormBoundary' + Math.random().toString(36).slice(2);
+
+    const header = Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="audio.mp4"\r\n` +
+      `Content-Type: video/mp4\r\n\r\n`
+    );
+
+    const modelField = Buffer.from(
+      `\r\n--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="model"\r\n\r\n` +
+      `whisper-large-v3`
+    );
+
+    const langField = Buffer.from(
+      `\r\n--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="language"\r\n\r\n` +
+      `it`
+    );
+
+    const formatField = Buffer.from(
+      `\r\n--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="response_format"\r\n\r\n` +
+      `json`
+    );
+
+    const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+
+    const body = Buffer.concat([header, fileBuffer, modelField, langField, formatField, footer]);
 
     const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-        ...form.getHeaders()
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': String(body.length)
       },
-      body: form.getBuffer()
+      body
     });
 
     const text = await response.text();
@@ -84,10 +85,6 @@ module.exports = async function handler(req, res) {
 
   } catch (err) {
     res.status(500).json({ error: err.message });
-  } finally {
-    // Pulizia file temporanei
-    try { fs.unlinkSync(inputPath); } catch {}
-    try { fs.unlinkSync(audioPath); } catch {}
   }
 };
 

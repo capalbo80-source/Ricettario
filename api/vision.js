@@ -1,4 +1,7 @@
-// Estrae frame dal video e li analizza con Gemini Flash
+// Analisi frame video con Gemini Flash Vision
+// Estrae frame con ffmpeg se disponibile, altrimenti manda il video direttamente
+
+const Busboy = require('busboy');
 const { execSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -15,77 +18,90 @@ module.exports = async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'GEMINI_API_KEY non configurata' });
 
   const tmpDir = os.tmpdir();
-  const inputPath = path.join(tmpDir, `vid_${Date.now()}.mp4`);
-  const framePattern = path.join(tmpDir, `frame_${Date.now()}_%d.jpg`);
+  const ts = Date.now();
+  const inputPath = path.join(tmpDir, `vid_${ts}.mp4`);
   const framePaths = [];
 
   try {
-    // Leggi il video dal body
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = Buffer.concat(chunks);
+    // Leggi il file con busboy
+    const fileBuffer = await new Promise((resolve, reject) => {
+      const bb = Busboy({ headers: req.headers });
+      let chunks = [];
+      let found = false;
+      bb.on('file', (name, stream) => {
+        found = true;
+        stream.on('data', d => chunks.push(d));
+        stream.on('end', () => resolve(Buffer.concat(chunks)));
+        stream.on('error', reject);
+      });
+      bb.on('finish', () => { if (!found) reject(new Error('Nessun file')); });
+      bb.on('error', reject);
+      req.pipe(bb);
+    });
 
-    // Parsing multipart
-    const contentType = req.headers['content-type'] || '';
-    const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
-    let videoBuffer = body;
-
-    if (boundaryMatch) {
-      const boundary = '--' + boundaryMatch[1];
-      const bodyStr = body.toString('binary');
-      const parts = bodyStr.split(boundary);
-      for (const part of parts) {
-        if (part.includes('Content-Disposition') && part.includes('filename')) {
-          const headerEnd = part.indexOf('\r\n\r\n');
-          if (headerEnd !== -1) {
-            const fileData = part.slice(headerEnd + 4, part.lastIndexOf('\r\n'));
-            videoBuffer = Buffer.from(fileData, 'binary');
-            break;
-          }
-        }
-      }
+    if (!fileBuffer || fileBuffer.length < 100) {
+      return res.status(400).json({ error: 'File vuoto' });
     }
 
-    fs.writeFileSync(inputPath, videoBuffer);
+    fs.writeFileSync(inputPath, fileBuffer);
 
-    // Estrai 4 frame distribuiti nel video con ffmpeg
-    let frames = [];
+    // Prova a estrarre frame con ffmpeg
+    let imageParts = [];
     try {
-      execSync(
-        `ffmpeg -i "${inputPath}" -vf "fps=1/5,scale=512:-1" -frames:v 4 "${framePattern}" -y 2>/dev/null`,
-        { timeout: 30000 }
-      );
-      // Raccogli i frame generati
-      for (let i = 1; i <= 4; i++) {
-        const fp = framePattern.replace('%d', String(i));
-        if (fs.existsSync(fp)) {
-          frames.push(fp);
-          framePaths.push(fp);
+      // Estrai 4 frame: a 2s, 5s, 10s, 15s dal video
+      const times = [2, 5, 10, 15];
+      for (const t of times) {
+        const framePath = path.join(tmpDir, `frame_${ts}_${t}.jpg`);
+        try {
+          execSync(
+            `ffmpeg -ss ${t} -i "${inputPath}" -vframes 1 -q:v 3 -vf "scale=512:-1" "${framePath}" -y 2>/dev/null`,
+            { timeout: 10000 }
+          );
+          if (fs.existsSync(framePath) && fs.statSync(framePath).size > 100) {
+            framePaths.push(framePath);
+            imageParts.push({
+              inlineData: {
+                mimeType: 'image/jpeg',
+                data: fs.readFileSync(framePath).toString('base64')
+              }
+            });
+          }
+        } catch {}
+      }
+    } catch {}
+
+    // Se nessun frame estratto, manda il primo secondo come fallback
+    if (imageParts.length === 0) {
+      try {
+        const framePath = path.join(tmpDir, `frame_${ts}_0.jpg`);
+        execSync(
+          `ffmpeg -i "${inputPath}" -vframes 1 -q:v 3 -vf "scale=512:-1" "${framePath}" -y 2>/dev/null`,
+          { timeout: 10000 }
+        );
+        if (fs.existsSync(framePath)) {
+          framePaths.push(framePath);
+          imageParts.push({
+            inlineData: {
+              mimeType: 'image/jpeg',
+              data: fs.readFileSync(framePath).toString('base64')
+            }
+          });
         }
-      }
-    } catch (e) {
-      return res.status(500).json({ error: 'ffmpeg non disponibile per estrazione frame' });
+      } catch {}
     }
 
-    if (frames.length === 0) {
-      return res.status(500).json({ error: 'Nessun frame estratto dal video' });
+    if (imageParts.length === 0) {
+      return res.status(200).json({ description: '' });
     }
 
-    // Converti frame in base64
-    const imageParts = frames.map(fp => ({
-      inlineData: {
-        mimeType: 'image/jpeg',
-        data: fs.readFileSync(fp).toString('base64')
-      }
-    }));
+    // Chiedi a Gemini di leggere la ricetta dai frame
+    const prompt = `Sei un assistente culinario. Analizza questi frame di un video di cucina e descrivi in italiano:
+- Il nome del piatto
+- Tutti gli ingredienti visibili (scritti sullo schermo o fisicamente presenti)
+- Le quantità se visibili
+- I passaggi del procedimento leggibili sullo schermo
 
-    // Chiedi a Gemini di descrivere la ricetta dai frame
-    const prompt = `Sei un assistente culinario. Analizza questi frame di un video di cucina e descrivi:
-1. Il nome del piatto che viene preparato
-2. Gli ingredienti che vedi (scritti sullo schermo o visibili fisicamente)
-3. I passaggi del procedimento che riesci a leggere o dedurre
-
-Rispondi in italiano. Sii specifico su quantità e ingredienti se visibili. Se non riesci a vedere chiaramente una ricetta, descrivi comunque cosa vedi nel video.`;
+Sii specifico. Se vedi testo scritto nel video, trascrivilo esattamente.`;
 
     const geminiRes = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
@@ -93,15 +109,10 @@ Rispondi in italiano. Sii specifico su quantità e ingredienti se visibili. Se n
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: prompt },
-              ...imageParts
-            ]
-          }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 1000 }
+          contents: [{ parts: [{ text: prompt }, ...imageParts] }],
+          generationConfig: { temperature: 0.2, maxOutputTokens: 800 }
         }),
-        signal: AbortSignal.timeout(30000)
+        signal: AbortSignal.timeout(25000)
       }
     );
 
