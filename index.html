@@ -417,6 +417,29 @@ function selectMethod(method) {
   setProgress(0);
 }
 
+// ── Analisi frame video con Gemini Vision ─────────────────────────────────────
+async function analyzeVideoFrames(file) {
+  try {
+    const formData = new FormData();
+    formData.append('file', file, 'video.mp4');
+    const res = await fetch('/api/vision', { method: 'POST', body: formData });
+    if (!res.ok) return '';
+    const data = await res.json();
+    return data.description || '';
+  } catch { return ''; }
+}
+
+function combineContext(transcript, visionDesc) {
+  const parts = [];
+  if (transcript && transcript.trim().length > 5) {
+    parts.push('=== AUDIO TRASCRITTO ===\n' + transcript);
+  }
+  if (visionDesc && visionDesc.trim().length > 5) {
+    parts.push('=== ANALISI VIDEO (ingredienti e testo visibili) ===\n' + visionDesc);
+  }
+  return parts.join('\n\n') || 'Nessuna informazione disponibile';
+}
+
 // ── Link reel (cobalt) ────────────────────────────────────────────────────────
 async function extractFromLink() {
   const url = document.getElementById('reelUrl').value.trim();
@@ -441,20 +464,28 @@ async function extractFromLink() {
     const videoRes = await fetch(cobaltData.videoUrl);
     if (!videoRes.ok) throw new Error('Impossibile scaricare il video');
     const blob = await videoRes.blob();
-    const filename = cobaltData.filename || 'video.mp4';
-    const file = new File([blob], filename, { type: blob.type || 'video/mp4' });
+    // Forza sempre mp4 — Whisper accetta solo formati specifici
+    const file = new File([blob], 'video.mp4', { type: 'video/mp4' });
 
     if (file.size > 25 * 1024 * 1024) throw new Error('Video troppo grande per Whisper (max 25 MB)');
 
     setProgress(40);
-    showStatus('🎙️ Trascrizione audio in corso...', 'info');
-    const transcript = await transcribeVideo(file);
-    if (!transcript || transcript.trim().length < 10) throw new Error('Audio non chiaro o non presente nel video');
+    showStatus('🎙️ Analisi audio e video in corso...', 'info');
 
-    setProgress(70);
+    const [transcriptResult, visionResult] = await Promise.allSettled([
+      transcribeVideo(file),
+      analyzeVideoFrames(file)
+    ]);
+
+    const transcript = transcriptResult.status === 'fulfilled' ? transcriptResult.value : '';
+    const visionDesc = visionResult.status === 'fulfilled' ? visionResult.value : '';
+
+    if (!transcript && !visionDesc) throw new Error('Impossibile analizzare il video — prova a incollare la descrizione nel tab 📋');
+
+    setProgress(75);
     showStatus('🤖 Estrazione ricetta in corso...', 'info');
     const name = document.getElementById('recipeNameLink').value.trim();
-    const recipe = await callGroqExtract(transcript, name);
+    const recipe = await callGroqExtract(combineContext(transcript, visionDesc), name);
     setProgress(100);
     saveRecipeToStorage(recipe);
     showStatus(`✅ Ricetta salvata: "${recipe.nome}"`, 'success');
@@ -491,16 +522,26 @@ async function extractFromVideo() {
   btn.disabled = true;
   try {
     setProgress(10);
-    showStatus('🎙️ Trascrizione audio in corso...', 'info');
-    const transcript = await transcribeVideo(selectedVideoFile);
-    if (!transcript || transcript.trim().length < 10) {
-      showStatus('❌ Trascrizione vuota — prova con un video che abbia audio chiaro', 'error');
+    showStatus('🎙️ Analisi audio e video in corso...', 'info');
+
+    // Lancia trascrizione audio e analisi visiva in parallelo
+    const [transcriptResult, visionResult] = await Promise.allSettled([
+      transcribeVideo(selectedVideoFile),
+      analyzeVideoFrames(selectedVideoFile)
+    ]);
+
+    const transcript = transcriptResult.status === 'fulfilled' ? transcriptResult.value : '';
+    const visionDesc = visionResult.status === 'fulfilled' ? visionResult.value : '';
+
+    if (!transcript && !visionDesc) {
+      showStatus('❌ Impossibile analizzare il video — prova con il tab 📋 Testo', 'error');
       btn.disabled = false; setProgress(0); return;
     }
-    setProgress(60);
+
+    setProgress(70);
     showStatus('🤖 Estrazione ricetta in corso...', 'info');
     const name = document.getElementById('recipeNameVideo').value.trim();
-    const recipe = await callGroqExtract(transcript, name);
+    const recipe = await callGroqExtract(combineContext(transcript, visionDesc), name);
     setProgress(100);
     saveRecipeToStorage(recipe);
     showStatus(`✅ Ricetta salvata: "${recipe.nome}"`, 'success');
@@ -523,7 +564,8 @@ function resetVideoUpload() {
 
 async function transcribeVideo(file) {
   const formData = new FormData();
-  formData.append('file', file, file.name);
+  // Whisper vuole sempre un nome .mp4/.mp3/.wav ecc. — mai blob generico
+  formData.append('file', file, 'audio.mp4');
   formData.append('model', 'whisper-large-v3');
   formData.append('language', 'it');
   formData.append('response_format', 'json');
